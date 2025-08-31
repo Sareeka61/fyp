@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Processing - Job {{ job_id }}</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 20px;
+        }
+        .main-content {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .video-section {
+            position: relative;
+            background: #000;
+            min-height: 400px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .video-placeholder {
+            color: #666;
+            font-size: 18px;
+        }
+        #video-stream {
+            max-width: 100%;
+            height: auto;
+            display: block;
+        }
+        .controls {
+            padding: 15px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #6c757d;
+        }
+        .status-dot.processing { background: #ffc107; }
+        .status-dot.completed { background: #28a745; }
+        .status-dot.error { background: #dc3545; }
+        .progress-bar {
+            flex: 1;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 0 15px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #007bff;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .sidebar {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .stats-panel {
+            padding: 20px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding: 8px 0;
+        }
+        .stat-value {
+            font-weight: bold;
+            color: #007bff;
+        }
+        .violations-panel {
+            padding: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .violation-item {
+            background: #fff5f5;
+            border: 1px solid #fed7d7;
+            border-radius: 4px;
+            padding: 12px;
+            margin-bottom: 10px;
+        }
+        .violation-item strong {
+            color: #c53030;
+        }
+        .violation-time {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 4px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn:hover { opacity: 0.9; }
+        .alert {
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        .alert-info { background: #d1ecf1; border: 1px solid #bee5eb; color: #0c5460; }
+        .alert-success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+        .alert-error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .hidden { display: none; }
+
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="main-content">
+            <div class="controls">
+                <div class="status-indicator">
+                    <div id="status-dot" class="status-dot"></div>
+                    <span id="status-text">Initializing...</span>
+                </div>
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <span id="progress-text">0%</span>
+                <button id="start-btn" class="btn btn-success">Start Processing</button>
+                <button id="stop-btn" class="btn btn-danger hidden">Stop</button>
+                <button id="view-results-btn" class="btn btn-primary hidden">View Detections & Violations</button>
+                <a href="/" class="btn btn-primary">New Job</a>
+            </div>
+
+            <div class="video-section">
+                <div id="video-placeholder" class="video-placeholder">
+                    <div class="loading"></div>
+                    <br>
+                    Waiting for video stream...
+                </div>
+                <img id="video-stream" class="hidden" src="" alt="Live Video Stream">
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="stats-panel">
+                <h3>Live Statistics</h3>
+                <div class="stat-item">
+                    <span>Frames Processed:</span>
+                    <span id="frames-processed" class="stat-value">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Total Frames:</span>
+                    <span id="total-frames" class="stat-value">-</span>
+                </div>
+                <div class="stat-item">
+                    <span>Violations Detected:</span>
+                    <span id="violations-count" class="stat-value">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Processing FPS:</span>
+                    <span id="current-fps" class="stat-value">-</span>
+                </div>
+
+            </div>
+
+            <div class="violations-panel">
+                <h3>Recent Violations</h3>
+                <div id="violations-list">
+                    <div class="alert alert-info">
+                        No violations detected yet.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const jobId = '{{ job_id }}';
+        let eventSource = null;
+        let streamStarted = false;
+        let lastFrameTime = Date.now();
+
+        // DOM elements
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const viewResultsBtn = document.getElementById('view-results-btn');
+        const videoPlaceholder = document.getElementById('video-placeholder');
+        const videoStream = document.getElementById('video-stream');
+        const framesProcessed = document.getElementById('frames-processed');
+        const totalFrames = document.getElementById('total-frames');
+        const violationsCount = document.getElementById('violations-count');
+        const currentFps = document.getElementById('current-fps');
+
+        const violationsList = document.getElementById('violations-list');
+
+        // Initialize
+        function init() {
+            connectToEvents();
+            updateStatus('pending', 'Ready to start');
+        }
+
+        // Connect to Server-Sent Events
+        function connectToEvents() {
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            eventSource = new EventSource(`/jobs/${jobId}/events`);
+
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                handleEvent(data);
+            };
+
+            eventSource.onerror = function() {
+                console.error('EventSource error');
+                updateStatus('error', 'Connection lost');
+            };
+        }
+
+        // Handle incoming events
+        function handleEvent(data) {
+            switch (data.type) {
+                case 'status':
+                    updateStatus(data.status, data.status);
+                    break;
+                case 'progress':
+                    updateProgress(data);
+                    break;
+                case 'violation':
+                    addViolation(data);
+                    break;
+
+                case 'completion':
+                    handleCompletion(data);
+                    break;
+                case 'error':
+                    handleError(data);
+                    break;
+                case 'heartbeat':
+                    // Keep connection alive
+                    break;
+            }
+        }
+
+        // Update job status
+        function updateStatus(status, text) {
+            statusText.textContent = text;
+            statusDot.className = 'status-dot ' + status;
+
+            if (status === 'processing') {
+                startBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+                if (!streamStarted) {
+                    startVideoStream();
+                }
+            } else if (status === 'completed' || status === 'error') {
+                startBtn.classList.add('hidden');
+                stopBtn.classList.add('hidden');
+            }
+        }
+
+        // Update progress
+        function updateProgress(data) {
+            const progress = data.progress || 0;
+            progressFill.style.width = progress + '%';
+            progressText.textContent = Math.round(progress) + '%';
+            framesProcessed.textContent = data.processed_frames || 0;
+            totalFrames.textContent = data.total_frames || '-';
+
+            // Calculate FPS
+            const now = Date.now();
+            if (data.processed_frames > 0) {
+                const fps = (data.processed_frames / ((now - lastFrameTime) / 1000)).toFixed(1);
+                currentFps.textContent = fps;
+            }
+        }
+
+
+
+        // Add violation to list
+        function addViolation(data) {
+            violationsCount.textContent = data.violation_count || 0;
+
+            const violationDiv = document.createElement('div');
+            violationDiv.className = 'violation-item';
+            violationDiv.innerHTML = `
+                <strong>${data.plate_text || 'Unknown'}</strong><br>
+                <span class="violation-time">${new Date(data.violation_time * 1000).toLocaleString()}</span>
+            `;
+
+            // Remove "no violations" message if present
+            const noViolations = violationsList.querySelector('.alert-info');
+            if (noViolations) {
+                noViolations.remove();
+            }
+
+            violationsList.insertBefore(violationDiv, violationsList.firstChild);
+
+            // Keep only last 10 violations
+            while (violationsList.children.length > 10) {
+                violationsList.removeChild(violationsList.lastChild);
+            }
+        }
+
+        // Start video stream
+        function startVideoStream() {
+            streamStarted = true;
+            videoPlaceholder.classList.add('hidden');
+            videoStream.classList.remove('hidden');
+            videoStream.src = `/jobs/${jobId}/stream.mjpg?${Date.now()}`;
+        }
+
+        // Handle completion
+        function handleCompletion(data) {
+            updateStatus('completed', 'Completed');
+            progressFill.style.width = '100%';
+            progressText.textContent = '100%';
+
+            // Show view results button
+            viewResultsBtn.classList.remove('hidden');
+
+            const alert = document.createElement('div');
+            alert.className = 'alert alert-success';
+            alert.textContent = `Processing completed! ${data.total_violations || 0} violations detected.`;
+            document.body.insertBefore(alert, document.body.firstChild);
+
+            if (eventSource) {
+                eventSource.close();
+            }
+        }
+
+        // Handle error
+        function handleError(data) {
+            updateStatus('error', 'Error');
+            const alert = document.createElement('div');
+            alert.className = 'alert alert-error';
+            alert.textContent = `Error: ${data.error || 'Unknown error occurred'}`;
+            document.body.insertBefore(alert, document.body.firstChild);
+        }
+
+        // Start processing
+        startBtn.addEventListener('click', function() {
+            fetch(`/jobs/${jobId}/start`, { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.message) {
+                        updateStatus('processing', 'Starting...');
+                    } else {
+                        alert('Error: ' + (data.error || 'Failed to start job'));
+                    }
+                })
+                .catch(error => {
+                    console.error('Error starting job:', error);
+                    alert('Failed to start processing');
+                });
+        });
+
+        // Stop processing
+        stopBtn.addEventListener('click', function() {
+            // Note: Stop functionality would need backend implementation
+            alert('Stop functionality not yet implemented');
+        });
+
+        // View results
+        viewResultsBtn.addEventListener('click', function() {
+            window.location.href = `/jobs/${jobId}/results`;
+        });
+
+        // Initialize when page loads
+        window.addEventListener('load', init);
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
+    </script>
+</body>
+</html>
