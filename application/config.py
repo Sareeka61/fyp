@@ -8,7 +8,7 @@ PLATE_MODEL_PATH = os.path.join(APP_ROOT, 'models/pd_traific_v2_mix.pt')
 CHAR_SEG_MODEL_PATH = os.path.join(APP_ROOT, 'models/sg_traific_v12.pt')
 CHAR_REC_MODEL_PATH = os.path.join(APP_ROOT, 'models/char_traific_v3.pth')
 
-FONT_PATH = None  
+FONT_PATH = os.path.join(APP_ROOT, 'NotoSansDevanagari-Regular.ttf')
 
 CLASS_LABELS = [
     'क', 'को', 'ख', 'ग', 'च', 'ज', 'झ', 'ञ', 'डि', 'त', 'ना', 'प', 'प्र', 'ब', 'बा',

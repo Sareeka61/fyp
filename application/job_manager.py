@@ -44,7 +44,8 @@ class Job:
         self.frame_snapshots = []  # Store frame snapshots for display
 
         # Output paths
-        self.output_dir = f"application/anpr_uploads/job_{self.job_id}"
+        from application.config import UPLOAD_FOLDER_PATH
+        self.output_dir = os.path.join(UPLOAD_FOLDER_PATH, f"job_{self.job_id}")
         os.makedirs(self.output_dir, exist_ok=True)
 
         logging.info(f"Created job {self.job_id} for video: {video_path}")

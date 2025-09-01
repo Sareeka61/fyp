@@ -30,7 +30,7 @@ except OSError as e:
     logging.error(f"Could not create upload folder '{config.UPLOAD_FOLDER_PATH}': {e}", exc_info=True)
 
 
-logging.info("----- Initializing ANPR Application - Loading Models -----")
+logging.info("----- Initializing Application - Loading Models -----")
 try:
     plate_detection_model, char_seg_model, char_recog_model, device, ocr_font_path = load_models()
     models_loaded = all([plate_detection_model, char_seg_model, char_recog_model])
@@ -267,7 +267,9 @@ def job_results(job_id):
 
     # Get frame snapshots from job object
     frame_snapshots = getattr(job, 'frame_snapshots', [])
-
+    logging.info(f"Job {job_id} results: {len(job.results)} detections, {len(frame_snapshots)} snapshots")
+    if frame_snapshots:
+        logging.info(f"Sample snapshot: {frame_snapshots[0]}")
     return render_template('results.html', results=job.results, filename=filename,
                          job_id=job_id, frame_snapshots=frame_snapshots)
 
@@ -277,15 +279,28 @@ def serve_snapshot(job_id, filename):
     """Serve snapshot images for a job"""
     job = job_manager.get_job(job_id)
     if not job:
+        logging.error(f"Job {job_id} not found for snapshot request")
         return {'error': 'Job not found'}, 404
 
     if not hasattr(job, 'output_dir') or not job.output_dir:
+        logging.error(f"No output directory for job {job_id}")
         return {'error': 'No output directory for job'}, 404
 
     snapshots_dir = os.path.join(job.output_dir, 'snapshots')
     snapshot_path = os.path.join(snapshots_dir, filename)
 
+    logging.info(f"Serving snapshot: {snapshot_path}")
+
     if not os.path.exists(snapshot_path):
+        logging.error(f"Snapshot not found: {snapshot_path}")
+        # Try to check if the file exists with a different case (Windows insensitive)
+        # or if the file is in a different directory level
+        # For debugging, list files in snapshots_dir
+        try:
+            files = os.listdir(snapshots_dir)
+            logging.error(f"Files in snapshots directory: {files}")
+        except Exception as e:
+            logging.error(f"Error listing snapshots directory: {e}")
         return {'error': 'Snapshot not found'}, 404
 
     from flask import send_file
@@ -293,7 +308,7 @@ def serve_snapshot(job_id, filename):
 
 
 if __name__ == '__main__':
-    logging.info("----- Starting ANPR Flask Application Web Server -----")
+    logging.info("----- Starting Flask Application Web Server -----")
     logging.info(f"Flask Secret Key: {'Set' if config.FLASK_SECRET_KEY != 'your_very_secret_key_change_me' else '!!! Using Default !!!'}")
     logging.info(f"Max Upload Size: {config.MAX_CONTENT_LENGTH / (1024*1024):.1f} MB")
     logging.info(f"Allowed Extensions: {', '.join(config.ALLOWED_EXTENSIONS)}")

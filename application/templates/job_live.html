@@ -370,7 +370,6 @@
 
             const alert = document.createElement('div');
             alert.className = 'alert alert-success';
-            alert.textContent = `Processing completed! ${data.total_violations || 0} violations detected.`;
             document.body.insertBefore(alert, document.body.firstChild);
 
             if (eventSource) {

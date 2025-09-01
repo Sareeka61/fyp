@@ -411,6 +411,7 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
         # Store frame snapshots in job object for display
         if 'frame_snapshots' in outputs:
             job.frame_snapshots = outputs['frame_snapshots']
+            logging.info(f"Set {len(job.frame_snapshots)} frame_snapshots for job {job.job_id}")
 
         logging.info(f"Job {job.job_id} processing completed. Processed {processed_count} frames, found {len(confirmed_violations)} violations.")
         logging.info(f"Generated outputs: {list(outputs.keys())}")

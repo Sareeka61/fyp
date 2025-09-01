@@ -60,7 +60,14 @@ class FileOutputGenerator:
                     break
 
                 # Add frame annotations
-                annotated_frame = self._add_frame_annotations(frame, frame_number, violations, frame_annotations)
+                # Extract overlays for this frame
+                overlays = []
+                if frame_annotations:
+                    for annotation in frame_annotations:
+                        if annotation.get('frame_number') == frame_number:
+                            overlays = annotation.get('overlays', [])
+                            break
+                annotated_frame = self._add_frame_annotations(frame, frame_number, violations, overlays)
 
                 # Write frame
                 out.write(annotated_frame)
@@ -80,15 +87,14 @@ class FileOutputGenerator:
             return None
 
     def _add_frame_annotations(self, frame: np.ndarray, frame_number: int,
-                             violations: List[Dict], frame_annotations: List[Dict] = None) -> np.ndarray:
+                             violations: List[Dict], overlays: List[Dict] = None) -> np.ndarray:
         """Add annotations to a single frame"""
         annotated = frame.copy()
 
-        # Add traffic light status and other overlays
-        if frame_annotations:
-            for annotation in frame_annotations:
-                if annotation.get('frame_number') == frame_number:
-                    self._draw_annotation(annotated, annotation)
+        # Add overlays (traffic lights, stop lines, etc.)
+        if overlays:
+            for overlay in overlays:
+                self._draw_overlay(annotated, overlay)
 
         # Add violation markers
         for violation in violations:
@@ -230,7 +236,7 @@ class FileOutputGenerator:
                     # Add violation annotation
                     annotated_frame = self._add_frame_annotations(frame,
                                                                 violation.get('frame_number', 0),
-                                                                [violation])
+                                                                [violation], [])
 
                     # Save snapshot
                     plate_text = violation.get('plate_text', 'unknown').replace(' ', '_')
@@ -250,11 +256,13 @@ class FileOutputGenerator:
             return []
 
     def generate_frame_snapshots(self, frame_annotations: List[Dict], results: List[Dict],
-                               max_frames: int = 20) -> List[str]:
+                               violations: List[Dict] = None, max_frames: int = 20) -> List[Dict]:
         """Generate individual frame snapshots with overlays for manual verification"""
         try:
             snapshot_paths = []
             frames_with_detections = []
+
+            logging.info(f"Generating frame snapshots from {len(frame_annotations)} annotations and {len(results)} results")
 
             # Find frames that have plate detections
             for annotation in frame_annotations:
@@ -271,6 +279,17 @@ class FileOutputGenerator:
                             'annotation': annotation,
                             'plates': frame_plates
                         })
+                        logging.debug(f"Frame {frame_number} has {len(frame_plates)} plates, will generate snapshot")
+
+            logging.info(f"Found {len(frames_with_detections)} frames with detections")
+            if frames_with_detections:
+                logging.info(f"Sample frame with detection: frame {frames_with_detections[0]['frame_number']}")
+            # Log frame_numbers from results
+            result_frame_numbers = set(r.get('frame_number', 0) for r in results)
+            logging.info(f"Result frame_numbers: {sorted(result_frame_numbers)}")
+            # Log frame_numbers from frame_annotations
+            annotation_frame_numbers = set(a.get('frame_number', 0) for a in frame_annotations)
+            logging.info(f"Annotation frame_numbers: {sorted(annotation_frame_numbers)}")
 
             # Sort by frame number and limit to max_frames
             frames_with_detections.sort(key=lambda x: x['frame_number'])
@@ -282,36 +301,25 @@ class FileOutputGenerator:
                 annotation = frame_data['annotation']
                 plates = frame_data['plates']
 
-                # Create annotated frame
-                annotated_frame = frame_image.copy()
-
-                # Apply all overlays from the annotation
-                overlays = annotation.get('overlays', [])
-                for overlay in overlays:
-                    self._draw_overlay(annotated_frame, overlay)
-
-                # Add frame info text
-                info_text = f"Frame {frame_number} - {len(plates)} plate(s) detected"
-                cv2.putText(annotated_frame, info_text, (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-
-                # Add timestamp
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                cv2.putText(annotated_frame, f"Generated: {timestamp}", (10, 60),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
-
-                # Save the frame snapshot
-                snapshot_name = f"frame_{frame_number:06d}_{len(plates)}_plates.jpg"
+                # Add annotations to the frame before saving
+                num_plates = len(plates)
+                snapshot_name = f"frame_{frame_number:06d}_{num_plates}_plates.jpg"
                 snapshot_path = os.path.join(self.snapshots_dir, snapshot_name)
 
-                cv2.imwrite(snapshot_path, annotated_frame)
-                snapshot_paths.append({
-                    'frame_number': frame_number,
-                    'filename': snapshot_name,
-                    'plates': plates
-                })
-
-                logging.debug(f"Generated frame snapshot: {snapshot_path}")
+                # Apply annotations to the frame
+                # Extract overlays from the frame annotation
+                overlays = annotation.get('overlays', [])
+                annotated_frame = self._add_frame_annotations(frame_image, frame_number, violations or [], overlays)
+                success = cv2.imwrite(snapshot_path, annotated_frame)
+                if success:
+                    snapshot_paths.append({
+                        'frame_number': frame_number,
+                        'filename': snapshot_name,
+                        'plates': plates
+                    })
+                    logging.info(f"Generated annotated frame snapshot: {snapshot_path}")
+                else:
+                    logging.error(f"Failed to save frame snapshot: {snapshot_path}")
 
             logging.info(f"Generated {len(snapshot_paths)} frame snapshots for manual verification")
             return snapshot_paths
@@ -388,7 +396,7 @@ class FileOutputGenerator:
 
         # Generate frame snapshots for manual verification
         if frame_annotations and results:
-            frame_snapshots = self.generate_frame_snapshots(frame_annotations, results)
+            frame_snapshots = self.generate_frame_snapshots(frame_annotations, results, violations)
             if frame_snapshots:
                 outputs['frame_snapshots'] = frame_snapshots
 

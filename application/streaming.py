@@ -284,7 +284,7 @@ def create_overlay_annotations(traffic_detector, frame_number, violations_count,
 
     overlays.append({
         'type': 'text',
-        'text': "Real-time ANPR + Traffic Light Detection",
+        'text': "Real-time + Traffic Light Detection",
         'position': (10, frame_height - 35),
         'font_scale': 0.5,
         'color': (150, 150, 150),
