@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "filename": "tmpo6xd0w97.mp4",
+    "total_frames": 203,
+    "processed_frames": 21,
+    "total_violations": 1,
+    "processing_timestamp": 1756702591.756834
+  },
+  "processing_timestamp": "2025-09-01T10:42:01.386207",
+  "total_violations": 1,
+  "violations": [
+    {
+      "track_id": "track_7",
+      "plate_text": "ग२२प५८१0",
+      "violation_time": 1756702583.9798138,
+      "violation_time_formatted": "2025-09-01 10:41:23",
+      "confidence": 0.4098166227340698,
+      "max_confidence": 0.4098166227340698,
+      "frame_number": 70,
+      "bbox": [
+        2787,
+        1406,
+        3087,
+        1488
+      ],
+      "evidence_frames": [
+        
