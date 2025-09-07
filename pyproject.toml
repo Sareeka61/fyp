@@ -1,7 +1,7 @@
 [project]
-name = "TRaiFIC"
+name = "TrafFlow"
 version = "0.1.0"
-description = "TRaiFIC : Automatic Nepali Number Plate Recognition System"
+description = "TrafFlow "
 readme = "README.md"
 requires-python = ">=3.10.17"
 dependencies = [
@@ -15,4 +15,3 @@ dependencies = [
    "split-folders>=0.5.1",
    "ultralytics>=8.3.116",
 ]
-
