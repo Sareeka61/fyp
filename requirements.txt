@@ -1,3 +1,16 @@
 torch
 torchvision
 Pillow
+flask
+flask-cors
+flask-socketio
+opencv-python
+ultralytics
+numpy
+reportlab
+redis
+flask-sqlalchemy
+flask-login
+werkzeug
+pymysql
+flask-limiter

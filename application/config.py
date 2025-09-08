@@ -96,3 +96,12 @@ SSE_HEARTBEAT_INTERVAL = 30  # SSE heartbeat interval in seconds
 FLASK_SECRET_KEY = 'your_very_secret_key_change_me'
 MAX_CONTENT_LENGTH = 1000 * 1024 * 1024 
 ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.webp', '.mp4', '.avi', '.mov', '.mkv'}
+
+# Database Configuration
+SQLALCHEMY_DATABASE_URI = 'sqlite:///traffic_violation.db'
+SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+# Security settings
+SESSION_COOKIE_SECURE = True
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'

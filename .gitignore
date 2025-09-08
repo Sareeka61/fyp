@@ -13,3 +13,4 @@ application/anpr_uploads/
 *.mp4
 *.mov
 application/**/anpr_uploads/**/*.mp4
+cookies.txt

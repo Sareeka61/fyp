@@ -8,6 +8,10 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 import numpy as np
 
+import os
+import logging
+from typing import List, Dict
+
 class FileOutputGenerator:
     """Generate various file outputs from video processing results"""
 
@@ -24,6 +28,10 @@ class FileOutputGenerator:
         os.makedirs(self.snapshots_dir, exist_ok=True)
 
         logging.info(f"FileOutputGenerator initialized with output dir: {output_dir}")
+
+    def generate_pdf_report(self, violations: List[Dict], metadata: Dict = None) -> str:
+        """PDF report generation removed as per user request"""
+        return None
 
     def generate_annotated_video(self, video_path: str, violations: List[Dict],
                                frame_annotations: List[Dict] = None,
