@@ -1,34 +1,37 @@
 import flask
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, request, jsonify, Response, render_template, send_from_directory
+from flask_cors import CORS
 import os
 import logging
-import tempfile
 import time
-import shutil
 import sys
+import json
+from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
+# Add the parent directory to sys.path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
 
 from application import config
 from application.model_loader import load_models
-
 from application.image_processing import process_file
 from application.job_manager import job_manager
 from application.streaming import create_mjpeg_response
-from application.events import create_sse_response, send_status_update
+from application.events import create_sse_response
 
-from application.utils import to_base64
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - [%(module)s:%(lineno)d] - %(message)s'
+)
 
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(module)s:%(lineno)d] - %(message)s')
-
+# Ensure upload folder exists
 try:
     os.makedirs(config.UPLOAD_FOLDER_PATH, exist_ok=True)
     logging.info(f"Upload folder ready: {config.UPLOAD_FOLDER_PATH}")
 except OSError as e:
     logging.error(f"Could not create upload folder '{config.UPLOAD_FOLDER_PATH}': {e}", exc_info=True)
-
 
 logging.info("----- Initializing Application - Loading Models -----")
 try:
@@ -37,278 +40,499 @@ try:
     if not models_loaded:
         logging.error("One or more models failed to load. Application might not function correctly.")
 except Exception as load_err:
-     logging.error(f"A critical error occurred during model loading: {load_err}", exc_info=True)
-     plate_detection_model, char_seg_model, char_recog_model, device, ocr_font_path = None, None, None, "cpu", None
-     models_loaded = False
-
-logging.info("Model Load")
-
+    logging.error(f"A critical error occurred during model loading: {load_err}", exc_info=True)
+    plate_detection_model, char_seg_model, char_recog_model, device, ocr_font_path = None, None, None, "cpu", None
+    models_loaded = False
 
 app = Flask(__name__)
+# CORS for everything under /api (and streams/SSE are same-origin via Vite proxy)
+CORS(app, resources={r"/*": {"origins": "*"}})
+
 app.config['UPLOAD_FOLDER'] = config.UPLOAD_FOLDER_PATH
 app.config['MAX_CONTENT_LENGTH'] = config.MAX_CONTENT_LENGTH
 app.secret_key = config.FLASK_SECRET_KEY
 
-app.jinja_env.filters['to_base64'] = to_base64
-app.jinja_env.globals.update(zip=zip)
+from flask_login import LoginManager
 
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
 
-@app.route('/', methods=['GET', 'POST'])
+# Add rate limiting for authentication endpoints
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"]
+)
+
+@login_manager.unauthorized_handler
+def unauthorized_callback():
+    if flask.request.path.startswith('/api/'):
+        return flask.jsonify({'error': 'Unauthorized'}), 401
+    else:
+        return flask.redirect(login_manager.login_view)
+
+# -------------------- Health & Root --------------------
+
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint that returns API status."""
+    return jsonify({
+        'status': 'online',
+        'models_loaded': models_loaded,
+        'version': '1.0'
+    })
+
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """Simple health check for frontend proxy."""
+    return jsonify({'ok': True, 'models_loaded': models_loaded}), 200
+
+# -------------------- Static uploads (if needed by reports/previews) --------------------
+
+@app.route('/uploads/<path:filename>')
+def serve_upload(filename):
+    """Serve uploaded files"""
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+# -------------------- Upload --------------------
+
+@app.route('/api/upload', methods=['POST'])
 def upload_file_route():
-    if request.method == 'POST':
+    try:
         if 'file' not in request.files:
-            flash('No file part in the request.', 'error')
-            return redirect(request.url)
+            return jsonify({'error': 'No file part in the request'}), 400
 
         file = request.files['file']
-
         if file.filename == '':
-            flash('No file selected.', 'warning')
-            return redirect(request.url)
+            return jsonify({'error': 'No file selected'}), 400
 
-        if file:
-            original_filename = file.filename
-            _, file_extension = os.path.splitext(original_filename)
-            file_extension = file_extension.lower()
+        # Validate extension
+        from application import config
+        allowed_exts = config.ALLOWED_EXTENSIONS
+        ext = '.' + file.filename.rsplit('.', 1)[-1].lower()
+        if ext not in allowed_exts:
+            return jsonify({
+                'error': f'Invalid file type {ext}, allowed: {", ".join(sorted(allowed_exts))}'
+            }), 400
 
-            if file_extension not in config.ALLOWED_EXTENSIONS:
-                allowed_str = ", ".join(config.ALLOWED_EXTENSIONS)
-                flash(f'Unsupported file type: "{file_extension}". Allowed types: {allowed_str}', 'error')
-                logging.warning(f"Upload rejected: Unsupported file type '{file_extension}' from file '{original_filename}'")
-                return redirect(request.url)
+        # Ensure upload folder exists
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-            temp_path = None
-            fd = None
-            try:
-                fd, temp_path = tempfile.mkstemp(suffix=file_extension, dir=app.config['UPLOAD_FOLDER'], text=False)
-                file.save(temp_path)
-                logging.info(f"File '{original_filename}' saved temporarily to '{temp_path}'")
+        # Save file
+        safe_filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_filename)
+        file.save(file_path)
 
-                if fd is not None:
-                    os.close(fd)
-                    fd = None
+        # Create job
+        job = job_manager.create_job(file_path)
 
-                if not models_loaded:
-                     flash('Models are not loaded correctly. Cannot process file.', 'error')
-                     logging.error("Processing aborted: Models not loaded.")
-                     return redirect(url_for('upload_file_route'))
+        return jsonify({
+            'job_id': job.job_id,
+            'type': 'video',   # if you also support images, detect mimetype here
+            'preview_url': f'/api/jobs/{job.job_id}/stream.mjpg',
+            'message': 'Video uploaded successfully'
+        }), 201
 
-                video_extensions = ['.mp4', '.avi', '.mov', '.mkv']
-                if file_extension in video_extensions:
-                    # Create job for live processing
-                    job = job_manager.create_job(temp_path)
-                    logging.info(f"Created job {job.job_id} for video file '{original_filename}'")
+    except RequestEntityTooLarge:
+        return jsonify({
+            'error': 'File too large',
+            'limit_mb': app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
+        }), 413
+    except Exception as e:
+        logging.error('Upload failed: %s', e, exc_info=True)
+        return jsonify({'error': f'Upload failed: {str(e)}'}), 500
+# -------------------- Job status / control --------------------
 
-                    # Redirect to live preview page
-                    return redirect(url_for('job_live_view', job_id=job.job_id))
-                else:
-                    # Process images synchronously
-                    start_process_time = time.time()
-                    results = process_file(
-                        temp_path,
-                        plate_detection_model,
-                        char_seg_model,
-                        char_recog_model,
-                        device,
-                        ocr_font_path
-                     )
-                    end_process_time = time.time()
-                    logging.info(f"Processing '{original_filename}' completed in {end_process_time - start_process_time:.3f} seconds. Found {len(results)} plates.")
-
-                    return render_template('results.html', results=results, filename=original_filename)
-
-            except Exception as e:
-                logging.error(f"Error processing uploaded file '{original_filename}': {e}", exc_info=True)
-                flash(f'An error occurred during processing: {str(e)}', 'error')
-                return redirect(url_for('upload_file_route'))
-
-            finally:
-                if fd is not None:
-                    try:
-                        os.close(fd)
-                    except OSError as close_err:
-                         logging.warning(f"Warning: Could not close temp file descriptor {fd}: {close_err}")
-
-    return render_template('upload.html')
-
-
-@app.route('/jobs', methods=['POST'])
-def create_job():
-    """Create a new video processing job"""
-    if 'file' not in request.files:
-        return {'error': 'No file part in the request'}, 400
-
-    file = request.files['file']
-    if file.filename == '':
-        return {'error': 'No file selected'}, 400
-
-    if file:
-        original_filename = file.filename
-        _, file_extension = os.path.splitext(original_filename)
-        file_extension = file_extension.lower()
-
-        if file_extension not in config.ALLOWED_EXTENSIONS:
-            return {'error': f'Unsupported file type: {file_extension}'}, 400
-
-        temp_path = None
-        fd = None
-        try:
-            fd, temp_path = tempfile.mkstemp(suffix=file_extension, dir=app.config['UPLOAD_FOLDER'], text=False)
-            file.save(temp_path)
-            logging.info(f"File '{original_filename}' saved temporarily to '{temp_path}'")
-
-            if fd is not None:
-                os.close(fd)
-                fd = None
-
-            # Create job
-            job = job_manager.create_job(temp_path)
-
-            return {
-                'job_id': job.job_id,
-                'status': job.status.value,
-                'message': 'Job created successfully',
-                'live_preview_url': f'/jobs/{job.job_id}/live'
-            }, 201
-
-        except Exception as e:
-            logging.error(f"Error creating job for file '{original_filename}': {e}", exc_info=True)
-            return {'error': str(e)}, 500
-
-        finally:
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError as close_err:
-                     logging.warning(f"Warning: Could not close temp file descriptor {fd}: {close_err}")
-
-
-@app.route('/jobs/<job_id>', methods=['GET'])
+@app.route('/api/jobs/<job_id>', methods=['GET'])
 def get_job_status(job_id):
     """Get job status"""
     job = job_manager.get_job(job_id)
     if not job:
-        return {'error': 'Job not found'}, 404
+        return jsonify({'error': 'Job not found'}), 404
 
-    return job.get_status_dict()
+    return jsonify(job.get_status_dict())
 
-
-@app.route('/jobs/<job_id>/stream.mjpg', methods=['GET'])
-def stream_job(job_id):
-    """MJPEG stream for live preview"""
-    job = job_manager.get_job(job_id)
-    if not job:
-        return {'error': 'Job not found'}, 404
-
-    if job.status != job.status.PROCESSING:
-        return {'error': 'Job not processing'}, 400
-
-    return create_mjpeg_response(job)
-
-
-@app.route('/jobs/<job_id>/start', methods=['POST'])
+@app.route('/api/jobs/<job_id>/start', methods=['POST'])
 def start_job(job_id):
     """Start processing a job"""
     job = job_manager.get_job(job_id)
     if not job:
-        return {'error': 'Job not found'}, 404
+        return jsonify({'error': 'Job not found'}), 404
 
     if job.status != job.status.PENDING:
-        return {'error': f'Job status is {job.status.value}, cannot start'}, 400
+        return jsonify({'error': f'Job status is {job.status.value}, cannot start'}), 400
 
     try:
-        # Import here to avoid circular imports
         from application.image_processing import process_video_for_job
 
-        job_manager.start_job(job_id, process_video_for_job,
-                            plate_detection_model, char_seg_model, char_recog_model, device, ocr_font_path)
+        job_manager.start_job(
+            job_id,
+            process_video_for_job,
+            plate_detection_model,
+            char_seg_model,
+            char_recog_model,
+            device,
+            ocr_font_path
+        )
 
-        return {'message': 'Job started successfully'}, 200
+        return jsonify({'message': 'Job started successfully'}), 200
 
     except Exception as e:
         logging.error(f"Error starting job {job_id}: {e}", exc_info=True)
-        return {'error': str(e)}, 500
+        return jsonify({'error': f'Failed to start job: {e}'}), 500
 
 
-@app.route('/jobs/<job_id>/events')
-def job_events(job_id):
-    """Server-Sent Events endpoint for real-time job updates"""
+# -------------------- Live MJPEG stream --------------------
+
+@app.route('/api/jobs/<job_id>/stream.mjpg', methods=['GET'])
+def stream_job(job_id):
+    """MJPEG stream for live preview"""
     job = job_manager.get_job(job_id)
     if not job:
-        return {'error': 'Job not found'}, 404
+        return jsonify({'error': 'Job not found'}), 404
 
-    return create_sse_response(job)
+    status_value = getattr(job.status, "value", job.status)
+    if status_value != 'processing':
+        return jsonify({'error': 'Job not processing'}), 400
 
+    return create_mjpeg_response(job)
+
+# -------------------- SSE events (preferred path is /api/...) --------------------
+
+@app.route('/jobs/<job_id>/events')
+@app.route('/api/jobs/<job_id>/events')
+def job_events(job_id):
+    """Server-Sent Events endpoint for real-time job updates (typed for the frontend)."""
+    def sse(data: dict) -> str:
+        # Minimal SSE format: one JSON message per event
+        return f"data: {json.dumps(data)}\n\n"
+
+    def generate():
+        job = job_manager.get_job(job_id)
+        if not job:
+            yield sse({'type': 'error', 'error': 'Job not found'})
+            return
+
+        last_processed = -1
+        last_total = -1
+        last_status = None
+        last_violation_count = 0
+
+        while True:
+            status_dict = job.get_status_dict() if hasattr(job, 'get_status_dict') else job.get_status()
+            # Safe defaults
+            status = status_dict.get('status')
+            processed_frames = status_dict.get('processed_frames', 0)
+            total_frames = status_dict.get('total_frames', 0)
+            fps = status_dict.get('fps', 0.0)
+            progress = status_dict.get('progress', 0.0)
+            violations_count = status_dict.get('violations_count', 0)
+
+            # 1) Status event (only when it changes)
+            if status and status != last_status:
+                yield sse({'type': 'status', 'status': status})
+                last_status = status
+
+            # 2) Progress event (only when something changes)
+            if (processed_frames != last_processed) or (total_frames != last_total):
+                payload = {
+                    'type': 'progress',
+                    'progress': progress,
+                    'processed_frames': processed_frames,
+                    'total_frames': total_frames,
+                    'fps': fps
+                }
+                yield sse(payload)
+                last_processed = processed_frames
+                last_total = total_frames
+
+            # 3) Violation events (emit any new ones since last tick)
+            # Try to pull a proper list, otherwise derive from results[] that have violation=True
+            violation_events = []
+            if hasattr(job, 'violation_events') and isinstance(job.violation_events, list):
+                violation_events = job.violation_events
+            elif getattr(job, 'results', None):
+                # derive best-effort violation items
+                violation_events = [
+                    {
+                        'plate_text': r.get('final_text') or r.get('plate_text') or 'Unknown',
+                        'confidence': r.get('confidence', 0.0),
+                        'frame_number': r.get('frame_number', 0),
+                        'violation_time': r.get('violation_time_epoch') or r.get('violation_time', 0),
+                        'track_id': r.get('track_id')
+                    }
+                    for r in job.results if r.get('violation')
+                ]
+
+            if len(violation_events) > last_violation_count:
+                # emit only the new ones
+                new_items = violation_events[last_violation_count:]
+                for ev in new_items:
+                    yield sse({
+                        'type': 'violation',
+                        'job_id': job_id,
+                        'plate_text': ev.get('plate_text', 'Unknown'),
+                        'confidence': ev.get('confidence', 0.0),
+                        'frame_number': ev.get('frame_number', 0),
+                        'violation_time': ev.get('violation_time', time.time()),
+                        'track_id': ev.get('track_id'),
+                        # keep a running count so the UI badge looks right
+                        'violation_count': last_violation_count + 1
+                    })
+                last_violation_count = len(violation_events)
+
+            # 4) Completion
+            if status in ('completed', 'error', 'cancelled'):
+                yield sse({'type': 'completion', 'status': status})
+                break
+
+            time.sleep(0.5)
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+        }
+    )
+
+# -------------------- Optional live page --------------------
 
 @app.route('/jobs/<job_id>/live')
 def job_live_view(job_id):
-    """Live preview page for job monitoring"""
+    """Serve the job live view page (optional)"""
     job = job_manager.get_job(job_id)
     if not job:
-        return {'error': 'Job not found'}, 404
-
+        return jsonify({'error': 'Job not found'}), 404
     return render_template('job_live.html', job_id=job_id)
 
+# -------------------- Results & Reports --------------------
 
-@app.route('/jobs/<job_id>/results')
-def job_results(job_id):
-    """Display results for a completed job"""
+@app.route('/api/jobs/<job_id>/results', methods=['GET'])
+def get_job_results(job_id):
+    """Get detailed job results"""
     job = job_manager.get_job(job_id)
     if not job:
-        flash('Job not found.', 'error')
-        return redirect(url_for('upload_file_route'))
+        return jsonify({'error': 'Job not found'}), 404
 
-    if job.status != job.status.COMPLETED:
-        flash('Job is not completed yet.', 'warning')
-        return redirect(url_for('job_live_view', job_id=job_id))
+    # Avoid div-by-zero
+    duration = 0
+    if job.completed_at and job.started_at and (job.completed_at - job.started_at) > 0:
+        duration = (job.completed_at - job.started_at)
 
-    # Get filename from video path
-    filename = os.path.basename(job.video_path)
+    results_data = {
+        'job_id': job.job_id,
+        'status': getattr(job.status, "value", job.status),
+        'total_plates': len(job.results),
+        'violations_count': job.violations_count,
+        'processed_frames': job.processed_frames,
+        'total_frames': job.total_frames,
+        'started_at': job.started_at,
+        'completed_at': job.completed_at,
+        'results': job.results,
+        'violations': [r for r in job.results if r.get('violation', False)],
+        'frame_snapshots': getattr(job, 'frame_snapshots', []),
+        'average_fps': (job.processed_frames / duration) if duration else 0.0
+    }
 
-    # Get frame snapshots from job object
-    frame_snapshots = getattr(job, 'frame_snapshots', [])
-    logging.info(f"Job {job_id} results: {len(job.results)} detections, {len(frame_snapshots)} snapshots")
-    if frame_snapshots:
-        logging.info(f"Sample snapshot: {frame_snapshots[0]}")
-    return render_template('results.html', results=job.results, filename=filename,
-                         job_id=job_id, frame_snapshots=frame_snapshots)
+    return jsonify(results_data)
 
-
-@app.route('/jobs/<job_id>/snapshots/<filename>')
-def serve_snapshot(job_id, filename):
-    """Serve snapshot images for a job"""
+@app.route('/api/jobs/<job_id>/report/<format_type>', methods=['GET'])
+def download_report(job_id, format_type):
+    """Download job report in specified format"""
     job = job_manager.get_job(job_id)
     if not job:
-        logging.error(f"Job {job_id} not found for snapshot request")
-        return {'error': 'Job not found'}, 404
+        return jsonify({'error': 'Job not found'}), 404
 
-    if not hasattr(job, 'output_dir') or not job.output_dir:
-        logging.error(f"No output directory for job {job_id}")
-        return {'error': 'No output directory for job'}, 404
+    try:
+        if format_type.lower() == 'csv':
+            import csv
+            import io
 
-    snapshots_dir = os.path.join(job.output_dir, 'snapshots')
-    snapshot_path = os.path.join(snapshots_dir, filename)
+            output = io.StringIO()
+            writer = csv.writer(output)
 
-    logging.info(f"Serving snapshot: {snapshot_path}")
+            # Headers
+            writer.writerow(['Frame', 'Plate Text', 'Confidence', 'Violation', 'Timestamp', 'Coordinates'])
 
-    if not os.path.exists(snapshot_path):
-        logging.error(f"Snapshot not found: {snapshot_path}")
-        # Try to check if the file exists with a different case (Windows insensitive)
-        # or if the file is in a different directory level
-        # For debugging, list files in snapshots_dir
-        try:
-            files = os.listdir(snapshots_dir)
-            logging.error(f"Files in snapshots directory: {files}")
-        except Exception as e:
-            logging.error(f"Error listing snapshots directory: {e}")
-        return {'error': 'Snapshot not found'}, 404
+            # Data
+            for result in job.results:
+                writer.writerow([
+                    result.get('frame_number', ''),
+                    result.get('final_text', ''),
+                    result.get('confidence', ''),
+                    'Yes' if result.get('violation', False) else 'No',
+                    result.get('violation_time', ''),
+                    str(result.get('plate_coordinates', ''))
+                ])
 
-    from flask import send_file
-    return send_file(snapshot_path, mimetype='image/jpeg')
+            output.seek(0)
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={'Content-Disposition': f'attachment; filename=traffic-analysis-{job_id}.csv'}
+            )
 
+        else:
+            return jsonify({'error': 'Unsupported format'}), 400
+
+    except Exception as e:
+        logging.error(f"Error generating {format_type} report for job {job_id}: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to generate {format_type} report'}), 500
+
+@app.route('/api/jobs/<job_id>/stats', methods=['GET'])
+def api_job_stats(job_id):
+    job = job_manager.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    # Prefer a dict method if present
+    d = job.get_status_dict() if hasattr(job, 'get_status_dict') else job.get_status()
+    return jsonify({
+        'job_id': job_id,
+        'frames': d.get('processed_frames', 0),
+        'fps': d.get('fps', 0.0),
+        'violations': d.get('violations_count', 0),
+        'progress': d.get('progress', 0.0),
+        'timestamp': int(time.time())
+    })
+
+
+@app.route('/api/jobs/<job_id>/violations', methods=['GET'])
+def api_job_violations(job_id):
+    limit = int(request.args.get('limit', 20))
+    job = job_manager.get_job(job_id)
+    if not job:
+        return jsonify([])
+
+    if hasattr(job, 'violation_events') and isinstance(job.violation_events, list):
+        events = job.violation_events
+        out = [{
+            'job_id': job_id,
+            'plate': ev.get('plate_text', 'Unknown'),
+            'confidence': ev.get('confidence', 0.0),
+            'bbox': ev.get('bbox'),
+            'frame_thumb': ev.get('frame_thumb'),
+            'timestamp': ev.get('violation_time') or ev.get('timestamp') or int(time.time()),
+            'frame_number': ev.get('frame_number', 0)
+        } for ev in events[-limit:]]
+        return jsonify(out)
+
+    # Fallback: build from results[]
+    if getattr(job, 'results', None):
+        vres = [r for r in job.results if r.get('violation')]
+        out = [{
+            'job_id': job_id,
+            'plate': r.get('final_text') or r.get('plate_text') or 'Unknown',
+            'confidence': r.get('confidence', 0.0),
+            'bbox': r.get('plate_coordinates'),
+            'frame_thumb': r.get('original_plate'),
+            'timestamp': r.get('violation_time') or r.get('timestamp') or int(time.time()),
+            'frame_number': r.get('frame_number', 0)
+        } for r in vres[-limit:]]
+        return jsonify(out)
+
+    return jsonify([])
+
+
+# -------------------- Authentication --------------------
+
+from application.user_model import db, User
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+
+# Initialize Flask-Login
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+@login_manager.user_loader
+def load_user(user_id):
+    # Updated to use Session.get() as Query.get() is deprecated in SQLAlchemy 2.0
+    from sqlalchemy.orm import Session
+    session = Session(db.engine)
+    return session.get(User, int(user_id))
+
+# Initialize database
+app.config['SQLALCHEMY_DATABASE_URI'] = config.SQLALCHEMY_DATABASE_URI
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = config.SQLALCHEMY_TRACK_MODIFICATIONS
+db.init_app(app)
+
+with app.app_context():
+    db.create_all()
+
+@app.route('/api/signup', methods=['POST'])
+@limiter.limit("5 per minute")
+def signup():
+    data = request.get_json()
+    username = data.get('username')
+    email = data.get('email')
+    password = data.get('password')
+
+    if not username or not email or not password:
+        return jsonify({'error': 'Username, email, and password are required'}), 400
+
+    # Password complexity validation
+    if len(password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters long'}), 400
+    if not any(char.isupper() for char in password):
+        return jsonify({'error': 'Password must contain at least one uppercase letter'}), 400
+    if not any(char.islower() for char in password):
+        return jsonify({'error': 'Password must contain at least one lowercase letter'}), 400
+    if not any(char.isdigit() for char in password):
+        return jsonify({'error': 'Password must contain at least one number'}), 400
+
+    if User.query.filter_by(username=username).first():
+        return jsonify({'error': 'Username already exists'}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({'error': 'Email already exists'}), 400
+
+    user = User(username=username, email=email)
+    user.set_password(password)
+    db.session.add(user)
+    db.session.commit()
+
+    login_user(user)
+    return jsonify({'message': 'User created successfully', 'user': {'id': user.id, 'username': user.username, 'email': user.email}}), 201
+
+@app.route('/api/login', methods=['POST'])
+@limiter.limit("10 per minute")
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password are required'}), 400
+
+    user = User.query.filter_by(username=username).first()
+    if not user or not user.check_password(password):
+        return jsonify({'error': 'Invalid username or password'}), 401
+
+    login_user(user)
+    return jsonify({'message': 'Login successful', 'user': {'id': user.id, 'username': user.username, 'email': user.email}}), 200
+
+@app.route('/api/logout', methods=['POST'])
+@login_required
+def logout():
+    logout_user()
+    return jsonify({'message': 'Logout successful'}), 200
+
+@app.route('/api/user', methods=['GET'])
+@login_required
+def get_user():
+    return jsonify({'user': {'id': current_user.id, 'username': current_user.username, 'email': current_user.email}}), 200
+
+
+# -------------------- Main --------------------
 
 if __name__ == '__main__':
-    logging.info("----- Starting Flask Application Web Server -----")
+    logging.info("----- Starting Flask API Server -----")
     logging.info(f"Flask Secret Key: {'Set' if config.FLASK_SECRET_KEY != 'your_very_secret_key_change_me' else '!!! Using Default !!!'}")
     logging.info(f"Max Upload Size: {config.MAX_CONTENT_LENGTH / (1024*1024):.1f} MB")
     logging.info(f"Allowed Extensions: {', '.join(config.ALLOWED_EXTENSIONS)}")
@@ -316,4 +540,5 @@ if __name__ == '__main__':
     if not models_loaded:
         logging.warning("Running with one or more models missing!")
 
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    # threaded=True helps SSE/MJPEG alongside processing threads
+    app.run(host='0.0.0.0', port=5003, debug=True, threaded=True)

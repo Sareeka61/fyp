@@ -4,7 +4,7 @@ import time
 import logging
 from queue import Queue
 from enum import Enum
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import cv2
 import os
 
@@ -36,12 +36,15 @@ class Job:
         self.stop_event = threading.Event()
 
         # Job metadata
+        # Job metadata
         self.total_frames = 0
         self.processed_frames = 0
         self.violations_count = 0
         self.progress = 0.0
+        self.fps = 0.0 
         self.results = []  # Store plate detection results
         self.frame_snapshots = []  # Store frame snapshots for display
+        self.violation_events: List[Dict[str, Any]] = []  
 
         # Output paths
         from application.config import UPLOAD_FOLDER_PATH
@@ -58,6 +61,15 @@ class Job:
 
         self.status = JobStatus.PROCESSING
         self.started_at = time.time()
+
+        # Notify listeners that job state changed to 'processing'
+        self.event_queue.put({
+            'type': 'status',
+            'job_id': self.job_id,
+            'status': self.status.value,
+            'started_at': self.started_at
+        })
+
 
         # Start processing thread
         self.processing_thread = threading.Thread(
@@ -126,14 +138,28 @@ class Job:
             'job_id': self.job_id,
             'processed_frames': processed_frames,
             'total_frames': total_frames,
-            'progress': self.progress
+            'progress': self.progress,
+            'fps': self.fps
         })
 
+
     def add_violation(self, violation_data: Dict[str, Any]):
-        """Add a violation event"""
+        """Add a violation event (and persist a normalized copy)"""
         self.violations_count += 1
 
-        # Send violation event
+        # Keep a normalized record for polling endpoints
+        normalized = {
+            'plate_text': violation_data.get('plate_text', 'Unknown'),
+            'confidence': violation_data.get('confidence', 0.0),
+            'frame_number': violation_data.get('frame_number', 0),
+            'violation_time': violation_data.get('violation_time', time.time()),
+            'bbox': violation_data.get('bbox'),
+        }
+        self.violation_events.append(normalized)
+        if len(self.violation_events) > 50:
+            self.violation_events = self.violation_events[-50:]
+
+        # Send violation event to SSE
         event_data = {
             'type': 'violation',
             'job_id': self.job_id,
@@ -166,9 +192,11 @@ class Job:
             'total_frames': self.total_frames,
             'processed_frames': self.processed_frames,
             'violations_count': self.violations_count,
+            'fps': self.fps,  # <-- NEW
             'error_message': self.error_message,
             'video_path': self.video_path
         }
+
 
     def cleanup(self):
         """Clean up job resources"""

@@ -262,16 +262,38 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
 
         # Get video properties
         fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        total_frames_raw = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         if fps <= 0:
-            logging.warning(f"Could not determine video frame rate for {filename}. Using default skip value: {config.VIDEO_FRAME_SKIP}")
+            logging.warning(
+            f"Could not determine video frame rate for {filename}. Using default skip value: {config.VIDEO_FRAME_SKIP}"
+            )
             frame_skip = config.VIDEO_FRAME_SKIP
         else:
             frame_skip = max(1, int(fps / config.TARGET_FPS))
-            logging.info(f"Video {filename}: {fps:.1f} FPS detected. Processing every {frame_skip} frames for ~{config.TARGET_FPS} FPS")
+            logging.info(
+                f"Video {filename}: {fps:.1f} FPS detected. Processing every {frame_skip} frames for ~{config.TARGET_FPS} FPS"
+            )
 
-        job.update_progress(0, total_frames)
+        # Frames we *expect* to process given skipping
+            total_frames_effective = max(1, (total_frames_raw // frame_skip) if frame_skip > 1 else total_frames_raw)
+
+        # --- NEW: initialize live stats on the job ---
+        job.total_frames = int(total_frames_effective)
+        job.processed_frames = 0
+        job.violations_count = 0
+        # keep/initialize a list to expose recent violation events for polling/SSE
+        if not hasattr(job, 'violation_events') or not isinstance(getattr(job, 'violation_events'), list):
+            job.violation_events = []
+
+        # For FPS computation
+        processing_start_ts = time.time()
+        job.fps = 0.0
+        job.progress = 0.0
+
+        # Optional: if your Job has update_progress, still keep it in sync
+        job.update_progress(0, job.total_frames)
+
 
         frame_number = 0
         processed_count = 0
@@ -328,22 +350,42 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
                                 logging.debug(f"Frame {frame_number}: Traffic light RED, checking violation for track {track_id}, plate: {plate_text}, bbox: {bbox}")
                                 violation = vehicle_tracker.detect_violation(track_id, config.VIRTUAL_LINE_Y_COORDINATE, frame_number)
                                 if violation:
-                                    logging.info(f"VIOLATION DETECTED: Frame {frame_number}, Track {track_id}, Plate: {plate_text}")
+                                    logging.info(
+                                        f"VIOLATION DETECTED: Frame {frame_number}, Track {track_id}, Plate: {plate_text}"
+                                    )
                                     current_frame_violations.append(violation)
                                     confirmed_violations.append(violation)
 
-                                    # Mark this plate as having a violation for display
+                                    # Mark for per-frame overlay
                                     plate_info['violation'] = True
                                     plate_info['violation_time'] = violation['violation_time_formatted']
 
-                                    # Send violation event
+                                    # --- NEW: update job-wide counters and append a normalized violation event ---
+                                    job.violations_count = int(job.violations_count) + 1
+
+                                    # Keep a normalized dict the polling/SSE endpoints can serve
+                                    job.violation_events.append({
+                                        'plate_text': violation['plate_text'],
+                                        'confidence': violation.get('confidence', 0.0),
+                                        'frame_number': violation.get('frame_number', frame_number),
+                                        # store raw unix time for API endpoints (formatted time is great for UI strings)
+                                        'violation_time': time.time(),
+                                        # optional bbox if you have it
+                                        'bbox': violation.get('bbox')
+                                    })
+                                    if len(job.violation_events) > 50:
+                                        job.violation_events = job.violation_events[-50:]
+
+                                    # Send violation event (add live count so UI can render badge numbers)
                                     send_violation_event(job, {
                                         'track_id': violation['track_id'],
                                         'plate_text': violation['plate_text'],
                                         'violation_time': violation['violation_time_formatted'],
                                         'confidence': violation['confidence'],
-                                        'frame_number': violation['frame_number']
+                                        'frame_number': violation['frame_number'],
+                                        'violation_count': job.violations_count,   # <--- NEW
                                     })
+
                                 else:
                                     logging.debug(f"Frame {frame_number}: No violation for track {track_id}, plate: {plate_text}")
                                     # Mark as no violation
@@ -386,10 +428,23 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
                     add_frame_to_job(job, frame, frame_number, overlays)
 
                     processed_count += 1
-                    job.update_progress(processed_count, total_frames // frame_skip)
 
-                    # Send progress update
-                    send_progress_update(job, processed_count, total_frames // frame_skip)
+                    # --- NEW: update the live job stats every processed frame ---
+                    job.processed_frames = processed_count
+
+                    elapsed = max(1e-6, time.time() - processing_start_ts)
+                    job.fps = job.processed_frames / elapsed
+
+                    if job.total_frames > 0:
+                        job.progress = min(100.0, (job.processed_frames / job.total_frames) * 100.0)
+                    else:
+                        job.progress = 0.0
+
+                    # Keep your existing “update_progress” call if other parts rely on it
+                    job.update_progress(processed_count, job.total_frames)
+
+                    # Send progress update to SSE helpers (if you use them)
+                    send_progress_update(job, processed_count, job.total_frames)
 
                 except Exception as e:
                     logging.error(f"Error processing frame {frame_number} in job {job.job_id}: {e}", exc_info=True)
@@ -400,7 +455,7 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
         logging.info(f"Generating file outputs for job {job.job_id}")
         metadata = {
             'filename': filename,
-            'total_frames': total_frames,
+            'total_frames': total_frames_raw,
             'processed_frames': processed_count,
             'total_violations': len(confirmed_violations),
             'processing_timestamp': time.time()
