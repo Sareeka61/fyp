@@ -1,12 +1,13 @@
 [project]
-name = "TrafFlow"
+name = "Trafflow"
 version = "0.1.0"
-description = "TrafFlow "
+description = "Trafflow : Automatic Nepali Number Plate Recognition System"
 readme = "README.md"
 requires-python = ">=3.10.17"
 dependencies = [
    "deep-sort-realtime>=1.3.2",
    "flask>=3.1.0",
+   "flask-cors>=6.0.1",
    "ipykernel>=6.29.5",
    "lap>=0.5.12",
    "notebook>=7.4.1",
