@@ -61,7 +61,7 @@ def add_frame_to_job(job, frame, frame_number=None, overlays=None):
     Add a processed frame to the job's queue for streaming
     Includes optional overlays for annotations
     """
-    if job.status != job.status.PROCESSING:
+    if job.status.value != 'processing':
         return
 
     # Add overlays if provided
