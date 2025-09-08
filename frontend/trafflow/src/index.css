@@ -1,0 +1,121 @@
+@import 'bootstrap/dist/css/bootstrap.min.css';
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  --primary-color: #287e74;
+  --secondary-color: #64748b; /* Neu;tral gray */
+  --text-light: #f1f5f9; /* Light text */
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+}
+
+.gradient-bg {
+  background: linear-gradient(135deg, var(--primary-color) 0%, #10f2d4 100%);
+}
+
+.shadow-custom {
+  box-shadow: var(--shadow);
+}
+
+.hover-lift {
+  transition: transform 0.2s ease-in-out;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+}
+
+/* Landing Page Styles */
+.hero-overlay {
+  background: linear-gradient(135deg, rgba(0, 0, 0, 0.4) 0%, rgba(0, 0, 0, 0.6) 100%);
+}
+
+.hero-heading {
+  font-weight: 900;
+  font-size: 4rem;
+  line-height: 1.1;
+  text-shadow: 2px 2px 8px rgba(0, 0, 0, 0.7);
+  animation: fadeInUp 1s ease-out;
+}
+
+.hero-subtext {
+  font-size: 1.5rem;
+  font-weight: 300;
+  text-shadow: 1px 1px 6px rgba(0, 0, 0, 0.6);
+  animation: fadeInUp 1s ease-out 0.2s both;
+}
+
+.btn-primary-custom {
+  background-color: #287e74;
+  border-color: #287e74;
+  border-radius: 8px;
+  padding: 0.75rem 1.5rem;
+  font-weight: 600;
+  box-shadow: var(--shadow);
+  transition: all 0.3s ease;
+}
+
+.btn-primary-custom:hover {
+  background-color: #287e74;
+  border-color: #287e74;
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+.btn-outline-custom {
+  border-color: white;
+  color: white;
+  border-radius: 8px;
+  padding: 0.75rem 1.5rem;
+  font-weight: 600;
+  background-color: transparent;
+  box-shadow: var(--shadow);
+  transition: all 0.3s ease;
+}
+
+.btn-outline-custom:hover {
+  background-color: white;
+  color: #333;
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Header Styles */
+.navbar-custom {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+}
+
+.logo-text {
+  font-weight: 700;
+  color: var(--primary-color);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .hero-heading {
+    font-size: 2.5rem;
+  }
+  .hero-subtext {
+    font-size: 1.2rem;
+  }
+}
