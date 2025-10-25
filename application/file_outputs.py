@@ -196,6 +196,24 @@ class FileOutputGenerator:
                     writer.writerow(row)
 
             logging.info(f"CSV report generated: {self.report_csv_path}")
+
+            # Save CSV report path to database
+            if metadata and metadata.get('job_id'):
+                try:
+                    from application.user_model import db, CsvReport, AnalysisJob
+                    analysis_job = AnalysisJob.query.filter_by(job_id=metadata['job_id']).first()
+                    if analysis_job:
+                        csv_report = CsvReport(
+                            job_id=analysis_job.id,
+                            report_type='violations',
+                            file_path=self.report_csv_path
+                        )
+                        db.session.add(csv_report)
+                        db.session.commit()
+                        logging.info(f"CSV report path saved to database for job {metadata['job_id']}")
+                except Exception as db_err:
+                    logging.error(f"Error saving CSV report path to database: {db_err}")
+
             return self.report_csv_path
 
         except Exception as e:

@@ -187,11 +187,13 @@ def process_video_for_job_enhanced(job, plate_model, seg_model, recog_model, dev
         job.update_progress(0, total_frames)
 
         frame_number = 0
-        # Processing parameters - optimized for performance
-        frame_skip = 3  # Process every 3rd frame for better efficiency
-        stats_emit_interval = 0.3  # Emit stats every 0.3 seconds for more responsive updates
+        processed_count = 0  # Initialize processed frame counter
+
+        # Use calculated frame_skip based on video FPS for consistent timing
+        # Don't override with hardcoded value
+        stats_emit_interval = 0.5  # Emit stats every 0.5 seconds (less frequent for performance)
         last_stats_emit = 0
-        preview_emit_interval = 0.2  # Emit preview frames every 0.2 seconds
+        preview_emit_interval = 0.3  # Emit preview frames every 0.3 seconds (less frequent)
         last_preview_emit = 0
 
         while not job.stop_event.is_set():
@@ -202,8 +204,8 @@ def process_video_for_job_enhanced(job, plate_model, seg_model, recog_model, dev
 
             if frame_number % frame_skip == 0:
                 try:
-                    # Update traffic light state for each frame
-                    violation_detector.traffic_light_state = violation_detector.detect_traffic_light_state(frame, frame_number)
+                    # Update traffic light state for each frame using frame-based simulation for consistency
+                    violation_detector.traffic_light_state = violation_detector.simulate_traffic_light_by_frame(frame_number, fps)
                     logging.debug(f"Frame {frame_number}: Traffic light state - RED: {violation_detector.traffic_light_state.is_red}, GREEN: {violation_detector.traffic_light_state.is_green}")
 
                     # Process frame with stats tracking
@@ -298,7 +300,7 @@ def process_video_for_job_enhanced(job, plate_model, seg_model, recog_model, dev
                     current_time = time.time()
                     if current_time - last_preview_emit >= preview_emit_interval:
                         add_frame_to_job(job, frame, frame_number, overlays)
-                        
+
                         # Emit preview frame via SocketIO (throttled and optimized)
                         # Resize frame for preview to reduce data size
                         preview_frame = cv2.resize(frame, (640, 360))  # Smaller preview for better performance
@@ -311,7 +313,7 @@ def process_video_for_job_enhanced(job, plate_model, seg_model, recog_model, dev
                     processed_count += 1
                     job.update_progress(processed_count, total_frames // frame_skip)
 
-                    # Emit stats update via SocketIO (throttled)
+                    # Emit stats update via SocketIO (throttled) - only every few frames to reduce load
                     current_time = time.time()
                     if current_time - last_stats_emit >= stats_emit_interval:
                         stats = stats_manager.get_stats(job_id)
@@ -325,6 +327,9 @@ def process_video_for_job_enhanced(job, plate_model, seg_model, recog_model, dev
                     continue
 
             frame_number += 1
+
+            # Small delay to prevent overwhelming the system
+            time.sleep(0.01)
 
         # Generate file outputs
         logging.info(f"Generating file outputs for job {job.job_id}")

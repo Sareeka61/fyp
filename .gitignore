@@ -14,3 +14,9 @@ application/anpr_uploads/
 *.mov
 application/**/anpr_uploads/**/*.mp4
 cookies.txt
+migrations/
+instance/
+backup/
+archives/
+.env/
+data/open_source_nepali_plates

@@ -77,7 +77,8 @@ const UploadForm = ({ onUploadComplete }) => {
       const response = await fetch(`${API_BASE}/upload`, {
         method: 'POST',
         body: formData,
-      });      
+        credentials: 'include',
+      });
 
       if (!response.ok) {
         let errorMessage = 'Upload failed';

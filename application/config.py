@@ -93,7 +93,7 @@ MAX_JOB_AGE_HOURS = 24  # Maximum age of completed jobs in hours
 EVENT_QUEUE_SIZE = 100  # Maximum size of event queue per job
 SSE_HEARTBEAT_INTERVAL = 30  # SSE heartbeat interval in seconds
 
-FLASK_SECRET_KEY = 'your_very_secret_key_change_me'
+FLASK_SECRET_KEY = 'dev_secret_key_12345'
 MAX_CONTENT_LENGTH = 1000 * 1024 * 1024 
 ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.webp', '.mp4', '.avi', '.mov', '.mkv'}
 
@@ -102,6 +102,6 @@ SQLALCHEMY_DATABASE_URI = 'sqlite:///traffic_violation.db'
 SQLALCHEMY_TRACK_MODIFICATIONS = False
 
 # Security settings
-SESSION_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = False  # Set to False for development (localhost)
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'

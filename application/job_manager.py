@@ -9,11 +9,12 @@ import cv2
 import os
 
 class JobStatus(Enum):
-    PENDING = "pending"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    ERROR = "error"
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
     CANCELLED = "cancelled"
+    PROCESSING = "processing"
 
 class Job:
     """Represents a video processing job with background processing capabilities"""
@@ -21,7 +22,7 @@ class Job:
     def __init__(self, video_path: str, job_id: Optional[str] = None):
         self.job_id = job_id or str(uuid.uuid4())
         self.video_path = video_path
-        self.status = JobStatus.PENDING
+        self.status = JobStatus.QUEUED
         self.created_at = time.time()
         self.started_at: Optional[float] = None
         self.completed_at: Optional[float] = None
@@ -36,40 +37,38 @@ class Job:
         self.stop_event = threading.Event()
 
         # Job metadata
-        # Job metadata
         self.total_frames = 0
         self.processed_frames = 0
         self.violations_count = 0
         self.progress = 0.0
-        self.fps = 0.0 
+        self.fps = 0.0
         self.results = []  # Store plate detection results
         self.frame_snapshots = []  # Store frame snapshots for display
-        self.violation_events: List[Dict[str, Any]] = []  
+        self.violation_events: List[Dict[str, Any]] = []
 
         # Output paths
         from application.config import UPLOAD_FOLDER_PATH
         self.output_dir = os.path.join(UPLOAD_FOLDER_PATH, f"job_{self.job_id}")
         os.makedirs(self.output_dir, exist_ok=True)
 
-        logging.info(f"Created job {self.job_id} for video: {video_path}")
+        logging.info(f"INFO: Job {self.job_id} created with status queued for video: {video_path}")
 
     def start_processing(self, processor_func, *args, **kwargs):
         """Start background processing of the job"""
-        if self.status != JobStatus.PENDING:
+        if self.status != JobStatus.QUEUED:
             logging.warning(f"Cannot start job {self.job_id}: status is {self.status.value}")
             return
 
-        self.status = JobStatus.PROCESSING
+        self.status = JobStatus.RUNNING
         self.started_at = time.time()
 
-        # Notify listeners that job state changed to 'processing'
+        # Notify listeners that job state changed to 'running'
         self.event_queue.put({
             'type': 'status',
             'job_id': self.job_id,
             'status': self.status.value,
             'started_at': self.started_at
         })
-
 
         # Start processing thread
         self.processing_thread = threading.Thread(
@@ -79,7 +78,7 @@ class Job:
         )
         self.processing_thread.start()
 
-        logging.info(f"Started processing job {self.job_id}")
+        logging.info(f"INFO: Job {self.job_id} started processing at {self.started_at}")
 
     def _process_video(self, processor_func, args, kwargs):
         """Background video processing function"""
@@ -88,10 +87,10 @@ class Job:
             result = processor_func(self, *args, **kwargs)
 
             if not self.stop_event.is_set():
-                self.status = JobStatus.COMPLETED
+                self.status = JobStatus.SUCCEEDED
                 self.completed_at = time.time()
                 self.progress = 100.0
-                logging.info(f"Job {self.job_id} completed successfully")
+                logging.info(f"INFO: Job {self.job_id} completed successfully at {self.completed_at}")
 
                 # Send completion event
                 self.event_queue.put({
@@ -103,10 +102,10 @@ class Job:
                 })
 
         except Exception as e:
-            self.status = JobStatus.ERROR
+            self.status = JobStatus.FAILED
             self.error_message = str(e)
             self.completed_at = time.time()
-            logging.error(f"Job {self.job_id} failed: {e}")
+            logging.error(f"INFO: Job {self.job_id} failed at {self.completed_at}: {e}")
 
             # Send error event
             self.event_queue.put({
@@ -124,7 +123,7 @@ class Job:
 
         self.status = JobStatus.CANCELLED
         self.completed_at = time.time()
-        logging.info(f"Job {self.job_id} cancelled")
+        logging.info(f"INFO: Job {self.job_id} cancelled at {self.completed_at}")
 
     def update_progress(self, processed_frames: int, total_frames: int):
         """Update job progress"""
@@ -192,7 +191,7 @@ class Job:
             'total_frames': self.total_frames,
             'processed_frames': self.processed_frames,
             'violations_count': self.violations_count,
-            'fps': self.fps,  # <-- NEW
+            'fps': self.fps,
             'error_message': self.error_message,
             'video_path': self.video_path
         }
@@ -226,6 +225,9 @@ class JobManager:
         self.max_concurrent_jobs = MAX_CONCURRENT_JOBS  # Limit concurrent processing
         self.active_jobs = 0
         self.lock = threading.Lock()
+
+        # Sync job status with database on startup
+        self._sync_jobs_with_database()
 
     def create_job(self, video_path: str) -> Job:
         """Create a new job"""
@@ -275,22 +277,32 @@ class JobManager:
         jobs_to_remove = []
         with self.lock:
             for job_id, job in self.jobs.items():
-                if (job.status in [JobStatus.COMPLETED, JobStatus.ERROR, JobStatus.CANCELLED] and
+                if (job.status in [JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED] and
                     job.completed_at and (current_time - job.completed_at) > max_age_seconds):
                     jobs_to_remove.append(job_id)
 
             for job_id in jobs_to_remove:
                 job = self.jobs.pop(job_id)
                 job.cleanup()
-                logging.info(f"Cleaned up old job {job_id}")
+                logging.info(f"INFO: Cleaned up old job {job_id}")
 
     def get_active_jobs(self) -> Dict[str, Dict[str, Any]]:
         """Get all active jobs"""
         return {
             job_id: job.get_status_dict()
             for job_id, job in self.jobs.items()
-            if job.status in [JobStatus.PENDING, JobStatus.PROCESSING]
+            if job.status in [JobStatus.QUEUED, JobStatus.RUNNING]
         }
+
+    def _sync_jobs_with_database(self):
+        """Sync job status with database on startup"""
+        try:
+            from application.user_model import AnalysisJob
+            # This will be called after db is initialized
+            # For now, just log that sync would happen
+            logging.info("Job manager database sync initialized")
+        except Exception as e:
+            logging.warning(f"Could not sync jobs with database: {e}")
 
 # Global job manager instance
 job_manager = JobManager()

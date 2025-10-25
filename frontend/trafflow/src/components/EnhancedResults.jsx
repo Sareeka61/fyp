@@ -16,7 +16,9 @@ const EnhancedResults = ({ results, processingComplete, onNewUpload }) => {
   const fetchJobResults = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/jobs/${results.job_id}/results`);
+      const response = await fetch(`${API_BASE}/jobs/${results.job_id}/results`, {
+        credentials: 'include',
+      });
       if (response.ok) {
         const data = await response.json();
         setJobResults(data);
@@ -35,7 +37,9 @@ const EnhancedResults = ({ results, processingComplete, onNewUpload }) => {
         console.error('Job ID is missing for report download.');
         return;
       }
-      const response = await fetch(`${API_BASE}/jobs/${jobId}/report/${format}`);
+      const response = await fetch(`${API_BASE}/jobs/${jobId}/report/${format}`, {
+        credentials: 'include',
+      });
       if (response.ok) {
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
@@ -138,7 +142,12 @@ const EnhancedResults = ({ results, processingComplete, onNewUpload }) => {
               <div className="col-md-3">
                 <SummaryCard
                   title="Processing Time"
-                  value={`${Math.round((jobResults.completed_at - jobResults.started_at) / 60)}m`}
+                  value={(() => {
+                    if (!jobResults.completed_at || !jobResults.started_at) return 'N/A';
+                    const start = typeof jobResults.started_at === 'string' ? new Date(jobResults.started_at).getTime() / 1000 : jobResults.started_at;
+                    const end = typeof jobResults.completed_at === 'string' ? new Date(jobResults.completed_at).getTime() / 1000 : jobResults.completed_at;
+                    return `${Math.round((end - start) / 60)}m`;
+                  })()}
                   icon="⏱️"
                   color="info"
                 />
@@ -207,7 +216,12 @@ const OverviewTab = ({ jobResults }) => (
             </div>
             <div className="d-flex justify-content-between">
               <span className="text-muted">Total Duration:</span>
-              <span>{jobResults ? `${Math.round((jobResults.completed_at - jobResults.started_at) / 60)} minutes` : 'N/A'}</span>
+              <span>{(() => {
+                if (!jobResults || !jobResults.completed_at || !jobResults.started_at) return 'N/A';
+                const start = typeof jobResults.started_at === 'string' ? new Date(jobResults.started_at).getTime() / 1000 : jobResults.started_at;
+                const end = typeof jobResults.completed_at === 'string' ? new Date(jobResults.completed_at).getTime() / 1000 : jobResults.completed_at;
+                return `${Math.round((end - start) / 60)} minutes`;
+              })()}</span>
             </div>
           </div>
         </div>
@@ -291,7 +305,7 @@ const DetectionCard = ({ detection }) => {
       )}
       <div className="card-body">
         <div className="d-flex align-items-center justify-content-between mb-2">
-          <span className="font-monospace h6 fw-bold">
+          <span className={`font-monospace h6 fw-bold ${detection.violation ? 'text-danger' : ''}`}>
             {detection.final_text || 'Unrecognized'}
           </span>
           {detection.violation && (
@@ -313,7 +327,7 @@ const DetectionCard = ({ detection }) => {
 };
 
 const ViolationsTab = ({ jobResults }) => {
-  if (!jobResults || !Array.isArray(jobResults.results)) {
+  if (!jobResults || !Array.isArray(jobResults.violations)) {
     return (
       <div className="text-center py-5">
         <div className="text-success mb-4">
@@ -327,7 +341,7 @@ const ViolationsTab = ({ jobResults }) => {
     );
   }
 
-  const violations = jobResults.results.filter(r => r.violation);
+  const violations = jobResults.violations;
 
   if (violations.length === 0) {
     return (
@@ -498,13 +512,24 @@ const AnalyticsTab = ({ jobResults }) => (
               <div className="d-flex justify-content-between">
                 <span>Total Processing Time:</span>
                 <span className="fw-bold">
-                  {jobResults ? `${Math.round((jobResults.completed_at - jobResults.started_at) / 60)}m` : 'N/A'}
+                  {(() => {
+                    if (!jobResults || !jobResults.completed_at || !jobResults.started_at) return 'N/A';
+                    const start = typeof jobResults.started_at === 'string' ? new Date(jobResults.started_at).getTime() / 1000 : jobResults.started_at;
+                    const end = typeof jobResults.completed_at === 'string' ? new Date(jobResults.completed_at).getTime() / 1000 : jobResults.completed_at;
+                    return `${Math.round((end - start) / 60)}m`;
+                  })()}
                 </span>
               </div>
               <div className="d-flex justify-content-between">
                 <span>Frames per Minute:</span>
                 <span className="fw-bold">
-                  {jobResults ? Math.round(jobResults.processed_frames / ((jobResults.completed_at - jobResults.started_at) / 60)) : 'N/A'}
+                  {(() => {
+                    if (!jobResults || !jobResults.completed_at || !jobResults.started_at || !jobResults.processed_frames) return 'N/A';
+                    const start = typeof jobResults.started_at === 'string' ? new Date(jobResults.started_at).getTime() / 1000 : jobResults.started_at;
+                    const end = typeof jobResults.completed_at === 'string' ? new Date(jobResults.completed_at).getTime() / 1000 : jobResults.completed_at;
+                    const durationMinutes = (end - start) / 60;
+                    return durationMinutes > 0 ? Math.round(jobResults.processed_frames / durationMinutes) : 'N/A';
+                  })()}
                 </span>
               </div>
             </div>

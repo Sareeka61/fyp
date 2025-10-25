@@ -13,7 +13,7 @@ def generate_mjpeg_stream(job):
     """
     logging.info(f"Starting MJPEG stream for job {job.job_id}")
 
-    while not job.stop_event.is_set() and job.status.value == 'processing':
+    while not job.stop_event.is_set() and job.status.value == 'running':
         try:
             # Get frame from queue with timeout
             frame_data = job.frame_queue.get(timeout=1.0)
@@ -61,7 +61,7 @@ def add_frame_to_job(job, frame, frame_number=None, overlays=None):
     Add a processed frame to the job's queue for streaming
     Includes optional overlays for annotations
     """
-    if job.status.value != 'processing':
+    if job.status.value != 'running':
         return
 
     # Add overlays if provided

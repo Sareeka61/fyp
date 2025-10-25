@@ -2,7 +2,7 @@ import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Button, Dropdown } from 'react-bootstrap';
 
-const Header = ({ onNewUpload, showNewUpload }) => {
+const Header = ({ onNewUpload, showNewUpload, onHistoryClick }) => {
   const { user, logout } = useAuth();
 
   const handleLogout = async () => {
@@ -38,6 +38,10 @@ const Header = ({ onNewUpload, showNewUpload }) => {
                     Welcome, {user.username}
                   </Dropdown.Toggle>
                   <Dropdown.Menu>
+                    <Dropdown.Item onClick={onHistoryClick}>
+                      History
+                    </Dropdown.Item>
+                    <Dropdown.Divider />
                     <Dropdown.Item onClick={handleLogout}>
                       Logout
                     </Dropdown.Item>

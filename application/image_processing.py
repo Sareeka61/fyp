@@ -2,6 +2,7 @@ import cv2
 import os
 import logging
 import time
+from datetime import datetime
 
 from application import config
 from application.utils import to_base64
@@ -13,11 +14,13 @@ from application.events import send_violation_event, send_progress_update, send_
 
 def process_frame(frame, frame_number, filename_prefix, plate_model, seg_model, recog_model, device, ocr_font):
     if plate_model is None or seg_model is None or recog_model is None:
-        logging.error(f"One or more models are not loaded. Cannot process frame {frame_number} from {filename_prefix}.")
-        return []
+        error_msg = f"One or more models are not loaded. Cannot process frame {frame_number} from {filename_prefix}."
+        logging.error(error_msg)
+        raise RuntimeError(error_msg)
     if frame is None or frame.size == 0:
-         logging.error(f"Received empty frame {frame_number} for processing.")
-         return []
+         error_msg = f"Received empty frame {frame_number} for processing."
+         logging.error(error_msg)
+         raise ValueError(error_msg)
 
     frame_results_list = []
     h_frame, w_frame = frame.shape[:2]
@@ -231,11 +234,12 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
     Process video for a job with live streaming, enhanced tracking, and file outputs
     """
     from application.streaming import add_frame_to_job, create_overlay_annotations
+    from application.user_model import db, AnalysisJob, Violation, PlateDetection
 
     file_path = job.video_path
     filename = os.path.basename(file_path)
 
-    logging.info(f"Starting enhanced job processing for {filename}")
+    logging.info(f"INFO: Starting enhanced job processing for {filename} (job {job.job_id})")
 
     # Initialize components
     violation_detector = TrafficViolationDetector()
@@ -286,6 +290,14 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
         if not hasattr(job, 'violation_events') or not isinstance(getattr(job, 'violation_events'), list):
             job.violation_events = []
 
+        # Get AnalysisJob from database
+        analysis_job = AnalysisJob.query.filter_by(job_id=job.job_id).first()
+        if analysis_job:
+            analysis_job.status = 'running'
+            analysis_job.total_frames = int(total_frames_effective)
+            analysis_job.started_at = datetime.now()
+            db.session.commit()
+
         # For FPS computation
         processing_start_ts = time.time()
         job.fps = 0.0
@@ -321,6 +333,33 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
 
                     # Store frame results in job for later display
                     job.results.extend(frame_results)
+
+                    # Save all plate detections to database
+                    if analysis_job:
+                        for plate_info in frame_results:
+                            if 'plate_coordinates' in plate_info:
+                                coords = plate_info['plate_coordinates']
+                                import json
+                                plate_detection = PlateDetection(
+                                    job_id=analysis_job.id,
+                                    plate_text=plate_info.get('final_text', ''),
+                                    confidence=plate_info.get('confidence', 0.0),
+                                    frame_number=plate_info.get('frame_number', frame_number),
+                                    bbox_x1=coords.get('x1'),
+                                    bbox_y1=coords.get('y1'),
+                                    bbox_x2=coords.get('x2'),
+                                    bbox_y2=coords.get('y2'),
+                                    is_violation=plate_info.get('violation', False),
+                                    original_plate=plate_info.get('original_plate'),
+                                    deskewed_plate=plate_info.get('deskewed_plate'),
+                                    digital_plate=plate_info.get('digital_plate'),
+                                    characters=json.dumps(plate_info.get('characters', []))
+                                )
+                                db.session.add(plate_detection)
+
+                        # Update processed frames in database
+                        analysis_job.processed_frames = processed_count
+                        db.session.commit()
 
                     # Update vehicle tracks and check for violations
                     current_frame_violations = []
@@ -375,6 +414,31 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
                                     })
                                     if len(job.violation_events) > 50:
                                         job.violation_events = job.violation_events[-50:]
+
+                                    # Save violation to database
+                                    if analysis_job:
+                                        # Find the corresponding plate_info for images
+                                        plate_info = next((p for p in frame_results if p.get('final_text') == violation['plate_text'] and p.get('frame_number') == violation['frame_number']), None)
+                                        violation_record = Violation(
+                                            job_id=analysis_job.id,
+                                            plate_text=violation['plate_text'],
+                                            violation_time=datetime.now(),
+                                            confidence=violation['confidence'],
+                                            frame_number=violation['frame_number'],
+                                            bbox_x1=violation.get('bbox', [0, 0, 0, 0])[0] if violation.get('bbox') else None,
+                                            bbox_y1=violation.get('bbox', [0, 0, 0, 0])[1] if violation.get('bbox') else None,
+                                            bbox_x2=violation.get('bbox', [0, 0, 0, 0])[2] if violation.get('bbox') else None,
+                                            bbox_y2=violation.get('bbox', [0, 0, 0, 0])[3] if violation.get('bbox') else None,
+                                            original_plate=plate_info.get('original_plate') if plate_info else None,
+                                            deskewed_plate=plate_info.get('deskewed_plate') if plate_info else None,
+                                            digital_plate=plate_info.get('digital_plate') if plate_info else None,
+                                            characters=json.dumps(plate_info.get('characters', [])) if plate_info else None
+                                        )
+                                        db.session.add(violation_record)
+
+                                        # Update job violations count in database
+                                        analysis_job.violations_count = job.violations_count
+                                        db.session.commit()
 
                                     # Send violation event (add live count so UI can render badge numbers)
                                     send_violation_event(job, {
@@ -461,6 +525,11 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
             'processing_timestamp': time.time()
         }
 
+        # Add job_id to metadata for CSV report database saving
+        if metadata is None:
+            metadata = {}
+        metadata['job_id'] = job.job_id
+
         outputs = file_generator.generate_all_outputs(file_path, confirmed_violations, frame_annotations, metadata, job.results)
 
         # Store frame snapshots in job object for display
@@ -468,8 +537,16 @@ def process_video_for_job(job, plate_model, seg_model, recog_model, device, ocr_
             job.frame_snapshots = outputs['frame_snapshots']
             logging.info(f"Set {len(job.frame_snapshots)} frame_snapshots for job {job.job_id}")
 
-        logging.info(f"Job {job.job_id} processing completed. Processed {processed_count} frames, found {len(confirmed_violations)} violations.")
-        logging.info(f"Generated outputs: {list(outputs.keys())}")
+        logging.info(f"INFO: Job {job.job_id} processing completed. Processed {processed_count} frames, found {len(confirmed_violations)} violations.")
+        logging.info(f"INFO: Generated outputs: {list(outputs.keys())}")
+
+        # Update job completion in database
+        if analysis_job:
+            analysis_job.status = 'succeeded'
+            analysis_job.completed_at = datetime.now()
+            analysis_job.processed_frames = processed_count
+            analysis_job.violations_count = len(confirmed_violations)
+            db.session.commit()
 
         # Send completion event
         send_completion_event(job)

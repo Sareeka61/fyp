@@ -8,6 +8,7 @@ import EnhancedResults from './components/EnhancedResults';
 import LandingPage from './components/LandingPage';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
+import HistoryPage from './pages/HistoryPage';
 import { Container, Spinner } from 'react-bootstrap';
 import {
   BrowserRouter as Router,
@@ -44,6 +45,11 @@ const AppContent = () => {
     );
   }
 
+  const handleHistoryClick = () => {
+    // Navigate to history page
+    setCurrentView('history');
+  };
+
   const handleUploadComplete = (result) => {
     setUploadData(result);
     if (result.type === 'video') {
@@ -71,6 +77,7 @@ const AppContent = () => {
       <Header
         onNewUpload={handleNewUpload}
         showNewUpload={currentView !== 'upload'}
+        onHistoryClick={handleHistoryClick}
       />
 
       <main className="py-4">
@@ -93,6 +100,10 @@ const AppContent = () => {
             processingComplete={processingComplete}
             onNewUpload={handleNewUpload}
           />
+        )}
+
+        {currentView === 'history' && (
+          <HistoryPage />
         )}
       </main>
     </div>
