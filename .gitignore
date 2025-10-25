@@ -20,3 +20,5 @@ backup/
 archives/
 .env/
 data/open_source_nepali_plates
+*.db
+traffic_violation.db
